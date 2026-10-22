@@ -1,0 +1,51 @@
+{
+  "name": "opencode-workbuddy-provider",
+  "version": "1.0.0",
+  "description": "WorkBuddy & CodeBuddy Provider for OpenCode (with OpenChamber Panel support)",
+  "author": "Thelast0802",
+  "license": "MIT",
+  "main": "service/index.js",
+  "bin": {
+    "opencode-workbuddy": "service/index.js"
+  },
+  "scripts": {
+    "start": "node service/index.js",
+    "login": "node service/index.js --login",
+    "build": "./build.sh"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-provider",
+    "openchamber",
+    "workbuddy",
+    "codebuddy",
+    "deepseek",
+    "thinking"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Thelast0802/opencode-workbuddy-provider.git"
+  },
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": {
+      "openchamber": ">=1.22.0"
+    },
+    "contributes": {
+      "panel": {
+        "id": "workbuddy",
+        "name": "WorkBuddy 国际版",
+        "icon": "icon.svg",
+        "entry": "panel/index.html"
+      },
+      "service": {
+        "entry": "service/index.js",
+        "runtime": "host"
+      },
+      "capabilities": [
+        "prompt",
+        "sessions"
+      ]
+    }
+  }
+}

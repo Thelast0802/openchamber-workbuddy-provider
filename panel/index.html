@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WorkBuddy 国际版</title>
+  <style>
+    :root {
+      --primary: #3b82f6;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --error: #ef4444;
+      --bg: #ffffff;
+      --surface: #f7f8fa;
+      --border: #e5e7eb;
+      --text: #111827;
+      --muted: #6b7280;
+    }
+    body[data-oc-theme="dark"] {
+      --bg: #16181d;
+      --surface: #22262e;
+      --border: #333a45;
+      --text: #f3f4f6;
+      --muted: #9ca3af;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 14px;
+      line-height: 1.5;
+    }
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px;
+    }
+    .title { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+    .toggle {
+      position: relative; width: 44px; height: 24px; border-radius: 12px;
+      background: var(--border); cursor: pointer; transition: background .2s; flex: none;
+    }
+    .toggle.on { background: var(--success); }
+    .toggle::after {
+      content: ''; position: absolute; width: 18px; height: 18px; border-radius: 50%;
+      background: #fff; top: 3px; left: 3px; transition: transform .2s;
+    }
+    .toggle.on::after { transform: translateX(20px); }
+
+    .diag-bar {
+      font-size: 11px; padding: 6px 10px; border-radius: 6px; margin-bottom: 12px;
+      background: var(--surface); border: 1px solid var(--border); color: var(--muted);
+      word-break: break-all;
+    }
+    .diag-bar.err { border-color: var(--error); color: var(--error); }
+    .diag-bar.ok { border-color: var(--success); color: var(--success); }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 12px; margin-bottom: 12px;
+    }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .label { font-size: 13px; font-weight: 500; }
+    .muted { font-size: 12px; color: var(--muted); }
+
+    .badge { padding: 3px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+    .badge.ok { background: var(--success); color: #fff; }
+    .badge.off { background: var(--error); color: #fff; }
+    .badge.idle { background: var(--border); color: var(--muted); }
+
+    button {
+      font: inherit; font-size: 13px; cursor: pointer; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--surface); color: var(--text);
+      padding: 7px 12px; transition: opacity .15s;
+    }
+    button:hover:not(:disabled) { opacity: .85; }
+    button:active:not(:disabled) { transform: scale(0.99); }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    button.small { padding: 4px 9px; font-size: 12px; }
+    button.block { width: 100%; padding: 10px; font-size: 14px; font-weight: 500; }
+
+    .spinner {
+      display: inline-block; width: 13px; height: 13px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.4); border-top-color: #fff;
+      animation: spin .7s linear infinite; vertical-align: -2px; margin-right: 5px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .mini-toggle {
+      position: relative; width: 34px; height: 18px; border-radius: 9px;
+      background: var(--border); cursor: pointer; transition: background .2s; flex: none;
+    }
+    .mini-toggle.on { background: var(--primary); }
+    .mini-toggle::after {
+      content: ''; position: absolute; width: 14px; height: 14px; border-radius: 50%;
+      background: #fff; top: 2px; left: 2px; transition: transform .2s;
+    }
+    .mini-toggle.on::after { transform: translateX(16px); }
+
+    .models { display: flex; flex-direction: column; gap: 6px; }
+    .model {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 10px; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 6px; transition: border-color .15s, opacity .15s;
+    }
+    .model:hover { border-color: var(--primary); }
+    .model.disabled {
+      opacity: 0.55;
+      background: var(--surface);
+    }
+    .model.disabled .model-name {
+      text-decoration: line-through;
+      color: var(--muted);
+    }
+    .model-left {
+      display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;
+    }
+    .model-info { min-width: 0; flex: 1; }
+    .model-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .model-id { font-size: 11px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .model-right {
+      text-align: right; flex: none; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+    }
+    .model-right:hover {
+      background: var(--surface);
+    }
+    .model-meta { font-size: 11px; color: var(--muted); }
+    .credit-tag {
+      font-size: 10px; padding: 1px 5px; border-radius: 4px; margin-left: 6px;
+      font-weight: 500; background: var(--surface); color: var(--muted); border: 1px solid var(--border);
+      vertical-align: 1px;
+    }
+    .credit-tag.free {
+      background: rgba(16, 185, 129, 0.15); color: var(--success); border-color: rgba(16, 185, 129, 0.35); font-weight: 600;
+    }
+
+    .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }
+    .stat { text-align: center; padding: 8px 4px; background: var(--bg); border-radius: 6px; }
+    .stat-v { font-size: 17px; font-weight: 600; }
+    .stat-k { font-size: 10px; color: var(--muted); }
+
+    .bars { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
+    .bar-row { font-size: 11px; }
+    .bar-track { height: 5px; background: var(--border); border-radius: 3px; margin-top: 2px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--primary); border-radius: 3px; }
+
+    .section-title { font-size: 13px; font-weight: 600; }
+    .hidden { display: none !important; }
+    .hint { font-size: 11px; color: var(--muted); margin-top: 8px; word-break: break-all; }
+    .token-box {
+      margin-top: 8px; display: flex; gap: 6px;
+    }
+    .token-box input {
+      flex: 1; padding: 6px 8px; font-size: 12px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    }
+  </style>
+</head>
+<body data-oc-theme="light">
+  <div class="header">
+    <div class="title">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1-4-10z"/>
+      </svg>
+      <span id="headerTitle">WorkBuddy</span>
+      <select id="regionSelect" style="font-size:12px; font-weight:500; border-radius:6px; border:1px solid var(--border); background:var(--surface); color:var(--text); padding:3px 6px; margin-left:4px; cursor:pointer;">
+        <option value="intl">🌐 国际版 (WorkBuddy)</option>
+        <option value="china">🇨🇳 中国版 (CodeBuddy)</option>
+      </select>
+    </div>
+    <div class="toggle" id="enableToggle" role="switch" aria-checked="false" tabindex="0"></div>
+  </div>
+
+  <div class="diag-bar" id="diagBar">正在连接扩展后台服务…</div>
+
+  <div class="card">
+    <div class="row">
+      <span class="label">账号状态</span>
+      <span class="badge idle" id="statusBadge">检测中</span>
+    </div>
+    <div class="muted" id="accountInfo" style="margin-top:6px;">正在自动检测本机免登录凭据…</div>
+    <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+      <button class="primary block" id="loginButton" style="flex:1;">一键授权 / 自动免密接入</button>
+      <button class="small hidden" id="logoutButton">退出</button>
+    </div>
+    <div class="hint hidden" id="loginUrlBox"></div>
+    <div class="hint hidden" id="configHint"></div>
+  </div>
+
+  <div class="card" id="creditCard">
+    <div class="row">
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span style="font-size:18px;">💎</span>
+        <div>
+          <span class="section-title">积分余额</span>
+          <span class="muted" style="font-size:11px; margin-left:4px;">(本地实时看板)</span>
+        </div>
+      </div>
+      <button class="small" id="calibrateCreditsBtn" title="校准/更新当前积分余额">✏️ 校准余额</button>
+    </div>
+    <div style="display:flex; align-items:baseline; gap:8px; margin-top:10px;">
+      <span class="stat-v" id="creditBalanceVal" style="font-size:28px; font-weight:700; color:var(--primary); font-family:ui-monospace,Menlo,monospace;">100.00</span>
+      <span class="muted" style="font-size:13px; font-weight:500;">积分 (Credits)</span>
+    </div>
+    <div class="row" style="margin-top:8px; font-size:12px; color:var(--muted); background:var(--bg); padding:6px 10px; border-radius:6px; border:1px solid var(--border);">
+      <div>已扣除：<span id="creditConsumedVal" style="font-weight:600; color:var(--warning);">0.00</span> 积分</div>
+      <div style="font-size:11px;">免费模型 (0x) 零扣费</div>
+    </div>
+    <div class="token-box hidden" id="creditEditBox" style="margin-top:8px;">
+      <input type="number" step="0.01" id="creditInput" placeholder="输入当前最新积分（如 100.00）" />
+      <button class="primary small" id="creditSaveBtn">保存</button>
+      <button class="small" id="creditCancelBtn">取消</button>
+    </div>
+  </div>
+
+  <div class="card" id="usageSection">
+    <div class="row" style="margin-bottom:6px;">
+      <span class="section-title">用量统计</span>
+      <button class="small" id="usageResetButton">清空统计</button>
+    </div>
+    <div class="stat-grid" style="grid-template-columns: repeat(4, 1fr);">
+      <div class="stat"><div class="stat-v" id="statTokens">0</div><div class="stat-k">总消耗 Token</div></div>
+      <div class="stat"><div class="stat-v" id="statRequests">0</div><div class="stat-k">总请求数</div></div>
+      <div class="stat"><div class="stat-v" id="statCreditsConsumed" style="color:var(--warning);">0.00</div><div class="stat-k">消耗积分</div></div>
+      <div class="stat"><div class="stat-v" id="statRate">0</div><div class="stat-k">平均 tok/s</div></div>
+    </div>
+    <div class="stat-grid" style="grid-template-columns: 1fr 1fr; margin-top:8px;">
+      <div class="stat"><div class="stat-v" id="statInput">0</div><div class="stat-k">输入 Token</div></div>
+      <div class="stat"><div class="stat-v" id="statOutput">0</div><div class="stat-k">输出 Token</div></div>
+    </div>
+    <div class="bars" id="usageBars"></div>
+  </div>
+
+  <div class="card" id="modelsSection">
+    <div class="row" style="margin-bottom:10px;">
+      <div>
+        <span class="section-title">模型管理</span>
+        <span class="muted" style="margin-left:4px; font-size:12px;">(<span id="modelsEnabledCount">0</span>/<span id="modelsTotalCount">0</span> 开启)</span>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="small" id="toggleAllModelsButton">全选/全消</button>
+        <button class="small" id="refreshModelsButton">🔄 刷新列表</button>
+        <button class="small primary" id="probeAllButton">⚡ 测速可用</button>
+      </div>
+    </div>
+    <div class="models" id="modelsGrid">
+      <div class="muted">连接后自动加载国际版模型列表…</div>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

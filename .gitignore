@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+.npm/
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Build and temporary files
+*.tmp
+*.log
+*.workbuddy-backup
+
+# State and local credentials
+workbuddy-ext-state.json
+*-state.json
+*.info
+
+# Output archives
+workbuddy-extension.zip
+workbuddy-extension-windows.zip
