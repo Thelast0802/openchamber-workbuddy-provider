@@ -312,9 +312,22 @@ function defaultUsage() {
   };
 }
 
+function defaultGlobalUsage() {
+  return {
+    totalTokens: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    requestCount: 0,
+    creditsConsumed: 0.0,
+    generationMs: 0,
+  };
+}
+
 function defaultRegionState(regionId) {
   const reg = REGIONS[regionId] || REGIONS.intl;
   return {
+    accounts: [],
+    activeAccountId: null,
     credential: null,
     enabled: false,
     models: [],
@@ -326,11 +339,13 @@ function defaultRegionState(regionId) {
 }
 
 const state = {
+  version: 3,
   currentRegion: 'intl',
   regions: {
     intl: defaultRegionState('intl'),
     china: defaultRegionState('china'),
   },
+  globalUsage: defaultGlobalUsage(),
   // 镜像当前激活区域的状态字段（兼容所有原有逻辑）：
   credential: null,
   enabled: false,
@@ -343,6 +358,13 @@ const state = {
   loginError: '',
 };
 
+function getActiveAccount(region) {
+  const r = region || state.currentRegion || 'intl';
+  const cur = state.regions[r];
+  if (!cur || !Array.isArray(cur.accounts)) return null;
+  return cur.accounts.find((a) => a.id === cur.activeAccountId) || cur.accounts[0] || null;
+}
+
 function syncActiveRegionFromState() {
   const r = state.currentRegion || 'intl';
   if (!state.regions[r]) state.regions[r] = defaultRegionState(r);
@@ -354,12 +376,36 @@ function syncActiveRegionFromState() {
   cur.modelsFetchedAt = state.modelsFetchedAt;
   cur.usage = state.usage;
   cur.credits = state.credits;
+
+  // 同步当前激活账号对象
+  if (Array.isArray(cur.accounts) && cur.activeAccountId) {
+    const acc = cur.accounts.find((a) => a.id === cur.activeAccountId);
+    if (acc) {
+      acc.credential = state.credential;
+      acc.credits = state.credits;
+      acc.usage = state.usage;
+      acc.lastActiveAt = Date.now();
+    }
+  }
 }
 
 function syncStateWithActiveRegion() {
   const r = state.currentRegion || 'intl';
   if (!state.regions[r]) state.regions[r] = defaultRegionState(r);
   const cur = state.regions[r];
+  if (!Array.isArray(cur.accounts)) cur.accounts = [];
+
+  if (!cur.activeAccountId && cur.accounts.length > 0) {
+    cur.activeAccountId = cur.accounts[0].id;
+  }
+
+  const activeAcc = cur.accounts.find((a) => a.id === cur.activeAccountId);
+  if (activeAcc) {
+    cur.credential = activeAcc.credential;
+    cur.credits = activeAcc.credits || cur.credits;
+    cur.usage = activeAcc.usage || cur.usage;
+  }
+
   state.credential = cur.credential;
   state.enabled = cur.enabled;
   state.models = Array.isArray(cur.models) ? cur.models : [];
@@ -367,6 +413,198 @@ function syncStateWithActiveRegion() {
   state.modelsFetchedAt = Number(cur.modelsFetchedAt) || 0;
   state.usage = cur.usage || defaultUsage();
   state.credits = cur.credits || defaultCredits(getActiveRegion().defaultCredits);
+}
+
+function computeAggregateUsage() {
+  let totalTokens = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let requestCount = 0;
+  let creditsConsumed = 0;
+  let accountsCount = 0;
+  const allAccounts = [];
+
+  for (const r of Object.keys(state.regions)) {
+    const list = state.regions[r].accounts || [];
+    for (const acc of list) {
+      accountsCount += 1;
+      const u = acc.usage || defaultUsage();
+      const c = acc.credits || defaultCredits(REGIONS[r]?.defaultCredits);
+      const inTok = Number(u.inputTokens) || 0;
+      const outTok = Number(u.outputTokens) || 0;
+      const totTok = Number(u.totalTokens) || (inTok + outTok);
+      inputTokens += inTok;
+      outputTokens += outTok;
+      totalTokens += totTok;
+      requestCount += (Number(u.requestCount) || 0);
+      creditsConsumed += (Number(c.totalConsumed) || 0);
+      allAccounts.push({
+        id: acc.id,
+        uid: acc.uid,
+        nickname: acc.nickname,
+        region: acc.region || r,
+        account_type: acc.account_type || 'personal',
+        status: acc.status || 'ready',
+        statusNote: acc.statusNote || '',
+        addedAt: acc.addedAt || 0,
+        lastActiveAt: acc.lastActiveAt || 0,
+        credits: {
+          initialBalance: c.initialBalance,
+          currentBalance: c.currentBalance,
+          totalConsumed: c.totalConsumed,
+          lastCalibratedAt: c.lastCalibratedAt,
+        },
+        usage: {
+          totalTokens: totTok,
+          inputTokens: inTok,
+          outputTokens: outTok,
+          requestCount: u.requestCount || 0,
+          generationMs: u.generationMs || 0,
+          modelStats: u.modelStats || {},
+        },
+        isActive: (r === state.currentRegion && acc.id === state.regions[r].activeAccountId),
+      });
+    }
+  }
+
+  return {
+    accountsCount,
+    totalTokens,
+    inputTokens,
+    outputTokens,
+    requestCount,
+    creditsConsumed: Math.round(creditsConsumed * 10000) / 10000,
+    accounts: allAccounts,
+  };
+}
+
+function addOrUpdateAccount(regionId, token, accountInfo) {
+  const r = regionId || state.currentRegion || 'intl';
+  if (!state.regions[r]) state.regions[r] = defaultRegionState(r);
+  const cur = state.regions[r];
+  if (!Array.isArray(cur.accounts)) cur.accounts = [];
+
+  const payload = jwtPayload(token.access_token) || {};
+  const uid = String(accountInfo.uid || payload.uid || payload.sub || `uid_${Date.now()}`);
+  const nickname = String(accountInfo.nickname || payload.nickname || payload.name || `用户 ${uid.slice(-4)}`);
+  const credential = { ...token, ...accountInfo, uid, nickname };
+
+  let acc = cur.accounts.find((a) => a.uid === uid || a.id === `acc_${r}_${uid}`);
+  if (acc) {
+    acc.credential = credential;
+    acc.nickname = nickname;
+    acc.status = 'active';
+    acc.statusNote = '';
+    acc.lastActiveAt = Date.now();
+  } else {
+    const reg = REGIONS[r] || REGIONS.intl;
+    acc = {
+      id: `acc_${r}_${uid}`,
+      uid,
+      nickname,
+      region: r,
+      account_type: accountInfo.account_type || 'personal',
+      credential,
+      credits: defaultCredits(reg.defaultCredits),
+      usage: defaultUsage(),
+      addedAt: Date.now(),
+      lastActiveAt: Date.now(),
+      status: 'active',
+      statusNote: '',
+    };
+    cur.accounts.push(acc);
+  }
+
+  for (const other of cur.accounts) {
+    if (other.id !== acc.id && other.status === 'active') {
+      other.status = 'ready';
+    }
+  }
+
+  cur.activeAccountId = acc.id;
+  state.credential = acc.credential;
+  state.credits = acc.credits;
+  state.usage = acc.usage;
+  return acc;
+}
+
+async function switchActiveAccount(accountId) {
+  let targetRegion = null;
+  let targetAccount = null;
+
+  for (const r of Object.keys(state.regions)) {
+    const acc = (state.regions[r].accounts || []).find((a) => a.id === accountId);
+    if (acc) {
+      targetRegion = r;
+      targetAccount = acc;
+      break;
+    }
+  }
+
+  if (!targetAccount) {
+    throw new Error(`找不到账号 ID: ${accountId}`);
+  }
+
+  // 1. 同步保存当前活跃账号数据
+  syncActiveRegionFromState();
+
+  // 2. 如果跨区域，切换区域
+  if (state.currentRegion !== targetRegion) {
+    state.currentRegion = targetRegion;
+  }
+
+  const cur = state.regions[targetRegion];
+  for (const acc of cur.accounts) {
+    if (acc.id === targetAccount.id) {
+      acc.status = 'active';
+      acc.lastActiveAt = Date.now();
+    } else if (acc.status === 'active') {
+      acc.status = 'ready';
+    }
+  }
+
+  cur.activeAccountId = targetAccount.id;
+  syncStateWithActiveRegion();
+  saveState();
+
+  // 3. 刷新模型与同步 opencode
+  await fetchModels(true).catch(() => {});
+  if (state.enabled) {
+    syncOpenCodeConfig(true);
+  }
+
+  log(`已切换至账号：${targetAccount.nickname} (${REGIONS[targetRegion].name})`);
+  return targetAccount;
+}
+
+function deleteAccount(accountId) {
+  for (const r of Object.keys(state.regions)) {
+    const cur = state.regions[r];
+    const idx = (cur.accounts || []).findIndex((a) => a.id === accountId);
+    if (idx !== -1) {
+      const removed = cur.accounts.splice(idx, 1)[0];
+      log(`已删除账号：${removed.nickname} (${removed.id})`);
+      if (cur.activeAccountId === accountId) {
+        if (cur.accounts.length > 0) {
+          cur.activeAccountId = cur.accounts[0].id;
+          cur.accounts[0].status = 'active';
+        } else {
+          cur.activeAccountId = null;
+          cur.credential = null;
+        }
+      }
+      syncStateWithActiveRegion();
+      saveState();
+      if (state.enabled && !state.credential) {
+        state.enabled = false;
+        syncOpenCodeConfig(false);
+      } else if (state.enabled) {
+        syncOpenCodeConfig(true);
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 function loadState() {
@@ -386,6 +624,8 @@ function loadState() {
       // 迁移旧版单一数据结构到 intl
       state.regions = {
         intl: {
+          accounts: [],
+          activeAccountId: null,
           credential: data.credential || null,
           enabled: Boolean(data.enabled),
           models: Array.isArray(data.models) ? data.models : [],
@@ -397,8 +637,52 @@ function loadState() {
         china: defaultRegionState('china'),
       };
     }
+
+    // 自动迁移旧版凭据到 accounts 账号池中
+    for (const r of ['intl', 'china']) {
+      const regState = state.regions[r];
+      if (!Array.isArray(regState.accounts)) regState.accounts = [];
+      if (regState.credential && regState.accounts.length === 0) {
+        const uid = regState.credential.uid || 'default';
+        const nickname = regState.credential.nickname || (r === 'china' ? '中国版用户' : '国际版用户');
+        const accId = `acc_${r}_${uid}`;
+        regState.accounts.push({
+          id: accId,
+          uid,
+          nickname,
+          region: r,
+          account_type: regState.credential.account_type || 'personal',
+          credential: regState.credential,
+          credits: regState.credits || defaultCredits(REGIONS[r].defaultCredits),
+          usage: regState.usage || defaultUsage(),
+          addedAt: Date.now(),
+          lastActiveAt: Date.now(),
+          status: 'active',
+          statusNote: '',
+        });
+        regState.activeAccountId = accId;
+      }
+      if (!regState.activeAccountId && regState.accounts.length > 0) {
+        regState.activeAccountId = regState.accounts[0].id;
+      }
+    }
+
+    if (data.globalUsage && typeof data.globalUsage === 'object') {
+      state.globalUsage = { ...defaultGlobalUsage(), ...data.globalUsage };
+    } else {
+      const agg = computeAggregateUsage();
+      state.globalUsage = {
+        totalTokens: agg.totalTokens,
+        inputTokens: agg.inputTokens,
+        outputTokens: agg.outputTokens,
+        requestCount: agg.requestCount,
+        creditsConsumed: agg.creditsConsumed,
+        generationMs: 0,
+      };
+    }
+
     syncStateWithActiveRegion();
-    log(`已加载持久化状态：region=${state.currentRegion}, enabled=${state.enabled}, models=${state.models.length}, credits=${state.credits.currentBalance}`);
+    log(`已加载持久化状态：region=${state.currentRegion}, enabled=${state.enabled}, accounts=${state.regions[state.currentRegion].accounts.length}, models=${state.models.length}, credits=${state.credits.currentBalance}`);
   } catch (error) {
     if (error && error.code !== 'ENOENT') log('加载状态失败（忽略）：', error.message);
   }
@@ -415,9 +699,10 @@ function saveState() {
       fs.mkdirSync(stateDir, { recursive: true });
     }
     const payload = {
-      version: 2,
+      version: 3,
       currentRegion: state.currentRegion,
       regions: state.regions,
+      globalUsage: state.globalUsage || defaultGlobalUsage(),
       // 保持旧版字段兼容
       credential: state.credential,
       enabled: state.enabled,
@@ -549,16 +834,19 @@ function getModelCreditCost(modelId) {
 }
 
 function recordUsage({ model, inputTokens, outputTokens, generationMs }) {
-  const usage = state.usage;
   const inTok = Math.max(0, Number(inputTokens) || 0);
   const outTok = Math.max(0, Number(outputTokens) || 0);
+  const creditCost = getModelCreditCost(model);
+  const genMs = Math.max(0, Number(generationMs) || 0);
+
+  // 1. 当前激活账号用量记录
+  const usage = state.usage;
   usage.requestCount += 1;
   usage.inputTokens += inTok;
   usage.outputTokens += outTok;
   usage.totalTokens = usage.inputTokens + usage.outputTokens;
-  if (generationMs > 0) usage.generationMs += generationMs;
+  if (genMs > 0) usage.generationMs += genMs;
 
-  const creditCost = getModelCreditCost(model);
   if (creditCost > 0) {
     state.credits.totalConsumed = Math.round((state.credits.totalConsumed + creditCost) * 10000) / 10000;
     state.credits.currentBalance = Math.max(0, Math.round((state.credits.initialBalance - state.credits.totalConsumed) * 10000) / 10000);
@@ -572,13 +860,63 @@ function recordUsage({ model, inputTokens, outputTokens, generationMs }) {
   stat.outputTokens += outTok;
   stat.creditsConsumed = Math.round(((stat.creditsConsumed || 0) + creditCost) * 10000) / 10000;
 
+  // 2. 插件全局跨账号累计用量记录
+  if (!state.globalUsage) state.globalUsage = defaultGlobalUsage();
+  const gu = state.globalUsage;
+  gu.requestCount += 1;
+  gu.inputTokens += inTok;
+  gu.outputTokens += outTok;
+  gu.totalTokens = gu.inputTokens + gu.outputTokens;
+  if (genMs > 0) gu.generationMs += genMs;
+  if (creditCost > 0) {
+    gu.creditsConsumed = Math.round(((gu.creditsConsumed || 0) + creditCost) * 10000) / 10000;
+  }
+
   saveState();
 }
 
 function usageSnapshot() {
-  const u = state.usage;
+  const u = state.usage || defaultUsage();
   const genMs = u.generationMs || 0;
+  const gu = state.globalUsage || defaultGlobalUsage();
+  const gGenMs = gu.generationMs || 0;
+  const agg = computeAggregateUsage();
+  const curAcc = getActiveAccount();
+
   return {
+    // 当前账号视角
+    currentAccount: {
+      id: curAcc ? curAcc.id : null,
+      nickname: curAcc ? curAcc.nickname : (state.credential ? state.credential.nickname : ''),
+      uid: curAcc ? curAcc.uid : (state.credential ? state.credential.uid : ''),
+      region: state.currentRegion,
+      status: curAcc ? curAcc.status : (state.credential ? 'active' : 'ready'),
+      totalTokens: u.totalTokens,
+      inputTokens: u.inputTokens,
+      outputTokens: u.outputTokens,
+      requestCount: u.requestCount,
+      avgTokPerSec: genMs > 0 ? Math.round(((u.outputTokens / genMs) * 1000) * 10) / 10 : 0,
+      modelStats: u.modelStats || {},
+      credits: {
+        initialBalance: state.credits.initialBalance,
+        currentBalance: state.credits.currentBalance,
+        totalConsumed: state.credits.totalConsumed,
+        lastCalibratedAt: state.credits.lastCalibratedAt,
+      },
+    },
+    // 全局累计用量视角（插件在所有账号上的生命周期总统计）
+    globalCumulative: {
+      totalTokens: gu.totalTokens,
+      inputTokens: gu.inputTokens,
+      outputTokens: gu.outputTokens,
+      requestCount: gu.requestCount,
+      creditsConsumed: gu.creditsConsumed || 0,
+      avgTokPerSec: gGenMs > 0 ? Math.round(((gu.outputTokens / gGenMs) * 1000) * 10) / 10 : 0,
+    },
+    // 全账号动态汇总（将账号池内所有账号相加求和）
+    allAccountsAggregate: agg,
+
+    // 保持顶层字段向后兼容
     totalTokens: u.totalTokens,
     inputTokens: u.inputTokens,
     outputTokens: u.outputTokens,
@@ -972,11 +1310,11 @@ function runLoginBackground(stateId) {
     try {
       const token = await pollToken(stateId);
       const account = await pollAccount(stateId, token.access_token);
-      state.credential = { ...token, ...account };
+      const acc = addOrUpdateAccount(state.currentRegion, token, account);
       await fetchModels(true);
       saveState();
       if (state.enabled) syncOpenCodeConfig(true);
-      log('登录成功：', account.nickname || account.uid);
+      log(`登录成功并归档至账号池：${acc.nickname || acc.uid} (ID: ${acc.id})`);
     } catch (error) {
       state.loginError = error.message;
       log('登录失败：', error.message);
@@ -1245,6 +1583,25 @@ function proxyChatCompletion(requestBody, res) {
           up.on('data', (c) => { errData += c; });
           up.on('end', () => {
             log(`上游请求失败 HTTP ${up.statusCode} (${model}):`, errData.slice(0, 300));
+            try {
+              const errObj = parseJSON(errData);
+              if (errObj && (errObj.code === 11140 || /11140/i.test(errData))) {
+                const curAcc = getActiveAccount();
+                if (curAcc) {
+                  curAcc.status = 'restricted';
+                  curAcc.statusNote = '11140: 账号存在异常行为，已被限制使用';
+                  saveState();
+                  log(`⚠️ 当前账号已自动标记为受限 (11140)：${curAcc.nickname || curAcc.uid}`);
+                }
+              } else if (up.statusCode === 401) {
+                const curAcc = getActiveAccount();
+                if (curAcc) {
+                  curAcc.status = 'expired';
+                  curAcc.statusNote = '凭据已失效，需重新授权';
+                  saveState();
+                }
+              }
+            } catch {}
             res.writeHead(up.statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(errData || JSON.stringify({ error: { message: `Upstream HTTP ${up.statusCode}` } }));
             finish(up.statusCode);
@@ -1398,6 +1755,8 @@ async function handleControl(req, res, pathname) {
       const disabledSet = new Set(state.disabledModels || []);
       const enabledCount = state.models.filter((m) => !disabledSet.has(m.id)).length;
       const activeRegion = getActiveRegion();
+      const agg = computeAggregateUsage();
+      const curAcc = getActiveAccount();
       sendJSON(res, 200, {
         currentRegion: state.currentRegion,
         regionName: activeRegion.name,
@@ -1407,9 +1766,12 @@ async function handleControl(req, res, pathname) {
         credentialValid: Boolean(state.credential),
         loginInProgress: state.loginInProgress,
         loginError: state.loginError,
-        account: state.credential
-          ? { uid: state.credential.uid, nickname: state.credential.nickname }
-          : null,
+        account: curAcc
+          ? { id: curAcc.id, uid: curAcc.uid, nickname: curAcc.nickname, status: curAcc.status, statusNote: curAcc.statusNote }
+          : (state.credential ? { uid: state.credential.uid, nickname: state.credential.nickname } : null),
+        activeAccountId: curAcc ? curAcc.id : null,
+        accounts: agg.accounts,
+        totalAccountsCount: agg.accountsCount,
         modelsCount: state.models.length,
         enabledModelsCount: enabledCount,
         disabledModels: state.disabledModels || [],
@@ -1422,6 +1784,77 @@ async function handleControl(req, res, pathname) {
           lastCalibratedAt: state.credits.lastCalibratedAt,
         },
       });
+      return;
+    }
+
+    case '/accounts': {
+      const agg = computeAggregateUsage();
+      const activeRegion = getActiveRegion();
+      const curAcc = getActiveAccount();
+      sendJSON(res, 200, {
+        currentRegion: state.currentRegion,
+        regionName: activeRegion.name,
+        activeAccountId: curAcc ? curAcc.id : null,
+        accounts: agg.accounts,
+        totalCount: agg.accountsCount,
+      });
+      return;
+    }
+
+    case '/accounts/switch': {
+      const body = await readJsonBody(req);
+      const accountId = String(body.accountId || '');
+      if (!accountId) {
+        sendJSON(res, 400, { error: '缺少 accountId' });
+        return;
+      }
+      try {
+        const switched = await switchActiveAccount(accountId);
+        sendJSON(res, 200, {
+          ok: true,
+          account: {
+            id: switched.id,
+            uid: switched.uid,
+            nickname: switched.nickname,
+            region: switched.region,
+            status: switched.status,
+          },
+          currentRegion: state.currentRegion,
+        });
+      } catch (error) {
+        sendJSON(res, 400, { error: error.message });
+      }
+      return;
+    }
+
+    case '/accounts/delete': {
+      const body = await readJsonBody(req);
+      const accountId = String(body.accountId || '');
+      if (!accountId) {
+        sendJSON(res, 400, { error: '缺少 accountId' });
+        return;
+      }
+      const ok = deleteAccount(accountId);
+      sendJSON(res, 200, { ok });
+      return;
+    }
+
+    case '/accounts/status-update': {
+      const body = await readJsonBody(req);
+      const accountId = String(body.accountId || '');
+      const status = String(body.status || 'ready');
+      const statusNote = String(body.statusNote || '');
+      for (const r of Object.keys(state.regions)) {
+        const acc = (state.regions[r].accounts || []).find((a) => a.id === accountId);
+        if (acc) {
+          acc.status = status;
+          acc.statusNote = statusNote;
+          saveState();
+          sendJSON(res, 200, { ok: true, account: acc });
+          return;
+        }
+      }
+      sendJSON(res, 404, { error: '未找到指定账号' });
       return;
     }
 
@@ -1483,8 +1916,9 @@ async function handleControl(req, res, pathname) {
     }
 
     case '/login/start': {
-      // 注意：不请求体，先应答，前端打开浏览器
-      if (state.credential) {
+      const body = await readJsonBody(req).catch(() => ({}));
+      const forceNew = Boolean(body && (body.forceNew || body.addAccount));
+      if (state.credential && !forceNew) {
         sendJSON(res, 200, { alreadyLoggedIn: true, loginUrl: '' });
         return;
       }
@@ -1515,13 +1949,18 @@ async function handleControl(req, res, pathname) {
     }
 
     case '/logout': {
-      state.credential = null;
-      state.models = [];
-      state.modelsFetchedAt = 0;
-      state.enabled = false;
-      state.loginError = '';
-      saveState();
-      syncOpenCodeConfig(false);
+      const curAcc = getActiveAccount();
+      if (curAcc) {
+        deleteAccount(curAcc.id);
+      } else {
+        state.credential = null;
+        state.models = [];
+        state.modelsFetchedAt = 0;
+        state.enabled = false;
+        state.loginError = '';
+        saveState();
+        syncOpenCodeConfig(false);
+      }
       sendJSON(res, 200, { ok: true });
       return;
     }
@@ -1628,9 +2067,22 @@ async function handleControl(req, res, pathname) {
     }
 
     case '/usage/reset': {
-      state.usage = defaultUsage();
-      state.credits.totalConsumed = 0;
-      state.credits.currentBalance = state.credits.initialBalance;
+      const body = await readJsonBody(req).catch(() => ({}));
+      const scope = String(body && body.scope ? body.scope : 'current').toLowerCase();
+      if (scope === 'global' || scope === 'all') {
+        state.globalUsage = defaultGlobalUsage();
+      }
+      if (scope === 'current' || scope === 'all') {
+        state.usage = defaultUsage();
+        state.credits.totalConsumed = 0;
+        state.credits.currentBalance = state.credits.initialBalance;
+        const curAcc = getActiveAccount();
+        if (curAcc) {
+          curAcc.usage = defaultUsage();
+          curAcc.credits.totalConsumed = 0;
+          curAcc.credits.currentBalance = curAcc.credits.initialBalance;
+        }
+      }
       saveState();
       sendJSON(res, 200, usageSnapshot());
       return;
@@ -1764,12 +2216,12 @@ async function handleCliLogin() {
     console.log('⏳ 正在等待浏览器授权中…（超时时间 5 分钟）');
     const token = await pollToken(stateId);
     const account = await pollAccount(stateId, token.access_token);
-    state.credential = { ...token, ...account };
+    const acc = addOrUpdateAccount(state.currentRegion, token, account);
     state.enabled = true;
     await fetchModels(true);
     saveState();
     syncOpenCodeConfig(true);
-    console.log(`\n🎉 登录成功！欢迎 ${account.nickname || account.uid}`);
+    console.log(`\n🎉 登录成功！已归档至账号池：${acc.nickname || acc.uid} (ID: ${acc.id})`);
     console.log(`✅ 已自动将 ${state.models.length} 个模型注入到 opencode.json`);
   } catch (error) {
     console.error('❌ 登录失败：', error.message);
@@ -1791,6 +2243,47 @@ function main() {
     syncStateWithActiveRegion();
     saveState();
     log('已切换至国际版 (WorkBuddy)');
+  }
+
+  if (process.argv.includes('--accounts') || process.argv.includes('-a')) {
+    const agg = computeAggregateUsage();
+    console.log('\n============================================================');
+    console.log(`📋 WorkBuddy 账号池清单 (共 ${agg.accountsCount} 个账号):`);
+    console.log('============================================================');
+    if (agg.accounts.length === 0) {
+      console.log('暂无已保存账号。可运行 `node service/index.js --login` 添加账号。');
+    } else {
+      agg.accounts.forEach((acc, i) => {
+        const activeTag = acc.isActive ? ' ⭐ [当前活跃]' : '';
+        const regionTag = acc.region === 'china' ? '[🇨🇳 中国版]' : '[🌐 国际版]';
+        const statusTag = acc.status === 'restricted' ? ' ⛔ [已受限]' : ` [${acc.status}]`;
+        console.log(`\n${i + 1}. ${regionTag} ${acc.nickname} (UID: ${acc.uid})${activeTag}${statusTag}`);
+        console.log(`   账号ID: ${acc.id}`);
+        console.log(`   积分余额: ${acc.credits.currentBalance.toFixed(2)} 积分 | 消耗: ${acc.credits.totalConsumed.toFixed(2)} 积分`);
+        console.log(`   累计Token: ${acc.usage.totalTokens.toLocaleString()} (输入: ${acc.usage.inputTokens.toLocaleString()} / 输出: ${acc.usage.outputTokens.toLocaleString()})`);
+        if (acc.statusNote) console.log(`   提示: ${acc.statusNote}`);
+      });
+    }
+    console.log('\n============================================================');
+    console.log(`📊 插件全局跨账号累计: 总消耗 ${agg.totalTokens.toLocaleString()} Token (输入: ${agg.inputTokens.toLocaleString()} / 输出: ${agg.outputTokens.toLocaleString()}) | 累计积分: ${agg.creditsConsumed.toFixed(2)}`);
+    console.log('============================================================\n');
+    process.exit(0);
+  }
+
+  const switchIdx = process.argv.indexOf('--switch');
+  if (switchIdx !== -1 && process.argv[switchIdx + 1]) {
+    const targetId = process.argv[switchIdx + 1];
+    switchActiveAccount(targetId)
+      .then((acc) => {
+        console.log(`\n✅ 已成功切换至账号: ${acc.nickname} (UID: ${acc.uid}, ${REGIONS[acc.region].name})`);
+        console.log(`   当前积分余额: ${acc.credits.currentBalance.toFixed(2)} 积分`);
+        process.exit(0);
+      })
+      .catch((err) => {
+        console.error(`\n❌ 切换账号失败:`, err.message);
+        process.exit(1);
+      });
+    return;
   }
 
   if (process.argv.includes('--login')) {

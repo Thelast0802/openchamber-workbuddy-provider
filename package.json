@@ -1,6 +1,6 @@
 {
   "name": "opencode-workbuddy-provider",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "WorkBuddy & CodeBuddy Provider for OpenCode (with OpenChamber Panel support)",
   "author": "Thelast0802",
   "license": "MIT",

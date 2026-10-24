@@ -1,5 +1,5 @@
 import { connectHost } from '@openchamber/sdk';
- 
+
 interface Credits {
   initialBalance: number;
   currentBalance: number;
@@ -17,7 +17,61 @@ interface Model {
   isFree?: boolean;
 }
 
-interface Usage {
+interface AccountEntry {
+  id: string;
+  uid: string;
+  nickname: string;
+  region: 'intl' | 'china';
+  account_type?: string;
+  status: 'active' | 'ready' | 'restricted' | 'expired';
+  statusNote?: string;
+  credits: Credits;
+  usage: {
+    totalTokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    requestCount: number;
+    generationMs: number;
+  };
+  isActive: boolean;
+}
+
+interface GlobalCumulativeUsage {
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  requestCount: number;
+  creditsConsumed: number;
+  avgTokPerSec: number;
+}
+
+interface AllAccountsAggregate {
+  accountsCount: number;
+  totalTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  requestCount: number;
+  creditsConsumed: number;
+  accounts: AccountEntry[];
+}
+
+interface UsageResponse {
+  currentAccount?: {
+    id: string | null;
+    nickname: string;
+    uid: string;
+    region: string;
+    status: string;
+    totalTokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    requestCount: number;
+    avgTokPerSec: number;
+    modelStats: Record<string, { requests: number; inputTokens: number; outputTokens: number; creditsConsumed?: number }>;
+    credits: Credits;
+  };
+  globalCumulative?: GlobalCumulativeUsage;
+  allAccountsAggregate?: AllAccountsAggregate;
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
@@ -27,6 +81,8 @@ interface Usage {
   credits?: Credits;
 }
 
+type Usage = UsageResponse;
+
 interface Status {
   currentRegion?: string;
   regionName?: string;
@@ -35,7 +91,10 @@ interface Status {
   loggedIn: boolean;
   loginInProgress: boolean;
   loginError: string;
-  account: { uid: string; nickname: string } | null;
+  account: { id?: string; uid: string; nickname: string; status?: string; statusNote?: string } | null;
+  activeAccountId?: string | null;
+  accounts?: AccountEntry[];
+  totalAccountsCount?: number;
   modelsCount: number;
   enabledModelsCount?: number;
   disabledModels?: string[];
@@ -58,6 +117,12 @@ let loggedIn = false;
 let models: Model[] = [];
 let disabledModels = new Set<string>();
 const probes = new Map<string, { state: ProbeState; latencyMs?: number; error?: string }>();
+
+let usageMode: 'current' | 'global' = 'current';
+let latestUsage: UsageResponse | null = null;
+let accountsList: AccountEntry[] = [];
+let activeAccountId: string | null = null;
+let isPoolOpen = false;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
   const el = document.getElementById(id);
@@ -96,6 +161,31 @@ function bindEventsImmediately(): void {
   $('calibrateCreditsBtn').addEventListener('click', () => toggleCreditEdit(true));
   $('creditCancelBtn').addEventListener('click', () => toggleCreditEdit(false));
   $('creditSaveBtn').addEventListener('click', () => void saveCalibratedCredits());
+
+  const togglePoolBtn = document.getElementById('togglePoolBtn');
+  if (togglePoolBtn) {
+    togglePoolBtn.addEventListener('click', () => toggleAccountPoolDrawer());
+  }
+
+  const addAccountBtn = document.getElementById('addAccountBtn');
+  if (addAccountBtn) {
+    addAccountBtn.addEventListener('click', () => void addNewAccount());
+  }
+
+  const quickSelect = document.getElementById('quickAccountSelect') as HTMLSelectElement | null;
+  if (quickSelect) {
+    quickSelect.addEventListener('change', () => void onQuickAccountChange(quickSelect.value));
+  }
+
+  const tabCur = document.getElementById('tabCurrentAccount');
+  const tabGlob = document.getElementById('tabGlobalCumulative');
+  if (tabCur) {
+    tabCur.addEventListener('click', () => setUsageTab('current'));
+  }
+  if (tabGlob) {
+    tabGlob.addEventListener('click', () => setUsageTab('global'));
+  }
+
   const input = document.getElementById('creditInput');
   if (input) {
     input.addEventListener('keydown', (e) => {
@@ -305,6 +395,10 @@ function renderStatus(status: Status | null): void {
     headerTitle.textContent = isChina ? 'CodeBuddy 中国版' : 'WorkBuddy 国际版';
   }
 
+  if (status && status.accounts) {
+    renderAccounts(status.accounts, status.activeAccountId || null);
+  }
+
   if (!status) {
     badge.className = 'badge off';
     badge.textContent = '服务未响应';
@@ -331,10 +425,23 @@ function renderStatus(status: Status | null): void {
     return;
   }
 
-  badge.className = 'badge ok';
-  badge.textContent = '已就绪';
+  const isRestricted = status.account?.status === 'restricted';
+  const isExpired = status.account?.status === 'expired';
+
+  if (isRestricted) {
+    badge.className = 'badge off';
+    badge.textContent = '⛔ 账号受限 (11140)';
+  } else if (isExpired) {
+    badge.className = 'badge off';
+    badge.textContent = '⚠️ 凭证失效';
+  } else {
+    badge.className = 'badge ok';
+    badge.textContent = '已就绪';
+  }
+
   const name = status.account?.nickname || (isChina ? 'CodeBuddy 用户' : 'WorkBuddy 国际版用户');
-  info.textContent = `${name}${status.account?.uid ? ` (${status.account.uid})` : ''}`;
+  const note = status.account?.statusNote ? `<div style="color:var(--error);font-size:11px;margin-top:4px;">⚠️ ${status.account.statusNote}（可点击账号池切换其他账号使用）</div>` : '';
+  info.innerHTML = `<div>${name}${status.account?.uid ? ` <span style="font-size:11px;color:var(--muted); font-family:ui-monospace,Menlo,monospace;">(${status.account.uid})</span>` : ''}</div>${note}`;
   loginBtn.classList.add('hidden');
   logoutBtn.classList.remove('hidden');
   $('loginUrlBox').classList.add('hidden');
@@ -349,6 +456,197 @@ function renderStatus(status: Status | null): void {
     hint.textContent = `✅ 已注入 ${status.configPath} → ${providerLabel} (127.0.0.1:${status.gatewayPort})`;
   } else {
     hint.classList.add('hidden');
+  }
+}
+
+function renderAccounts(accounts: AccountEntry[], currentActiveId: string | null): void {
+  accountsList = accounts;
+  activeAccountId = currentActiveId;
+
+  const countEl = document.getElementById('accountPoolCount');
+  if (countEl) countEl.textContent = String(accounts.length);
+
+  const quickBar = document.getElementById('quickAccountBar');
+  const quickSelect = document.getElementById('quickAccountSelect') as HTMLSelectElement | null;
+
+  if (quickBar && quickSelect) {
+    if (accounts.length > 0) {
+      quickBar.classList.remove('hidden');
+      quickSelect.innerHTML = '';
+      for (const acc of accounts) {
+        const opt = document.createElement('option');
+        opt.value = acc.id;
+        const regionTag = acc.region === 'china' ? '🇨🇳 中国' : '🌐 国际';
+        const balance = acc.credits?.currentBalance != null ? `${acc.credits.currentBalance.toFixed(1)}分` : '';
+        const statusText = acc.status === 'restricted' ? ' [⛔受限]' : (acc.status === 'expired' ? ' [⚠️过期]' : '');
+        opt.textContent = `${regionTag} · ${acc.nickname || acc.uid} (${balance})${statusText}`;
+        if (acc.id === currentActiveId || acc.isActive) {
+          opt.selected = true;
+        }
+        quickSelect.appendChild(opt);
+      }
+    } else {
+      quickBar.classList.add('hidden');
+    }
+  }
+
+  const container = document.getElementById('accountListContainer');
+  if (!container) return;
+  container.innerHTML = '';
+
+  if (accounts.length === 0) {
+    container.innerHTML = '<div class="muted" style="font-size:12px; padding:6px 0;">账号池暂无账号，点击右上角「+ 添加新账号」接入。</div>';
+    return;
+  }
+
+  for (const acc of accounts) {
+    const isCur = acc.id === currentActiveId || acc.isActive;
+    const card = document.createElement('div');
+    card.className = `account-card ${isCur ? 'active' : ''} ${acc.status === 'restricted' ? 'restricted' : ''}`;
+
+    const left = document.createElement('div');
+    left.style.display = 'flex';
+    left.style.flexDirection = 'column';
+    left.style.gap = '2px';
+    left.style.minWidth = '0';
+    left.style.flex = '1';
+
+    const titleRow = document.createElement('div');
+    titleRow.style.display = 'flex';
+    titleRow.style.alignItems = 'center';
+    titleRow.style.gap = '6px';
+
+    const tag = document.createElement('span');
+    tag.className = `account-tag ${acc.region === 'china' ? 'china' : 'intl'}`;
+    tag.textContent = acc.region === 'china' ? '🇨🇳 中国' : '🌐 国际';
+
+    const name = document.createElement('span');
+    name.style.fontSize = '12px';
+    name.style.fontWeight = '600';
+    name.style.whiteSpace = 'nowrap';
+    name.style.overflow = 'hidden';
+    name.style.textOverflow = 'ellipsis';
+    name.textContent = acc.nickname || acc.uid;
+
+    const badge = document.createElement('span');
+    badge.className = `account-badge ${acc.status || 'ready'}`;
+    badge.textContent = isCur ? '🟢 活跃' : (acc.status === 'restricted' ? '⛔ 11140受限' : (acc.status === 'expired' ? '⚠️ 已过期' : '就绪'));
+
+    titleRow.append(tag, name, badge);
+
+    const sub = document.createElement('div');
+    sub.className = 'muted';
+    sub.style.fontSize = '11px';
+    const balanceStr = acc.credits ? `${acc.credits.currentBalance.toFixed(2)} 积分` : '0 积分';
+    const tokensStr = acc.usage ? `${fmt(acc.usage.totalTokens)} tok` : '0 tok';
+    sub.textContent = `余额: ${balanceStr} · 用量: ${tokensStr} (${acc.usage?.requestCount || 0}次)`;
+
+    left.append(titleRow, sub);
+
+    const right = document.createElement('div');
+    right.style.display = 'flex';
+    right.style.alignItems = 'center';
+    right.style.gap = '4px';
+    right.style.flex = 'none';
+
+    if (!isCur) {
+      const switchBtn = document.createElement('button');
+      switchBtn.className = 'small primary';
+      switchBtn.textContent = '切换';
+      switchBtn.style.padding = '3px 8px';
+      switchBtn.style.fontSize = '11px';
+      switchBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void switchAccount(acc.id);
+      });
+      right.appendChild(switchBtn);
+    }
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'small';
+    delBtn.textContent = '✕';
+    delBtn.title = '从账号池移除';
+    delBtn.style.padding = '3px 6px';
+    delBtn.style.fontSize = '11px';
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void deleteAccount(acc.id, acc.nickname || acc.uid);
+    });
+    right.appendChild(delBtn);
+
+    card.append(left, right);
+    container.appendChild(card);
+  }
+}
+
+function toggleAccountPoolDrawer(): void {
+  isPoolOpen = !isPoolOpen;
+  const drawer = document.getElementById('accountPoolDrawer');
+  if (drawer) {
+    drawer.classList.toggle('hidden', !isPoolOpen);
+  }
+}
+
+async function switchAccount(accountId: string): Promise<void> {
+  setDiag('正在切换活跃账号…');
+  const res = await serviceRequest<{
+    ok: boolean;
+    account: { id: string; uid: string; nickname: string; region: string };
+    currentRegion: string;
+  }>('POST', '/accounts/switch', { accountId });
+
+  if (res && res.ok) {
+    probes.clear();
+    await refreshAll();
+    await notify('success', `🎉 已成功切换至账号：${res.account.nickname || res.account.uid}`);
+  }
+}
+
+async function onQuickAccountChange(accountId: string): Promise<void> {
+  if (accountId && accountId !== activeAccountId) {
+    await switchAccount(accountId);
+  }
+}
+
+async function deleteAccount(accountId: string, name: string): Promise<void> {
+  const confirmMsg = `确定从账号池中移除账号「${name}」吗？`;
+  if (!confirm(confirmMsg)) return;
+
+  const res = await serviceRequest<{ ok: boolean }>('POST', '/accounts/delete', { accountId });
+  if (res && res.ok) {
+    await refreshAll();
+    await notify('info', `已移除账号 ${name}`);
+  }
+}
+
+async function addNewAccount(): Promise<void> {
+  const urlBox = $('loginUrlBox');
+  setDiag('正在启动新账号授权流程…');
+  try {
+    const result = await serviceRequest<{
+      loginUrl: string;
+      loginInProgress?: boolean;
+    }>('POST', '/login/start', { forceNew: true });
+
+    if (result && result.loginUrl) {
+      urlBox.classList.remove('hidden');
+      urlBox.innerHTML = `已在系统浏览器打开新账号授权页。若未自动弹出，请访问：<br><a href="${result.loginUrl}" target="_blank" style="color:var(--primary);text-decoration:underline;">点击进行新账号授权</a>`;
+      if (host) {
+        await host.openUrl(result.loginUrl).catch(() => {});
+        await host.writeClipboard(result.loginUrl).catch(() => {});
+      }
+      await notify('info', '已打开浏览器授权页，登录新账号后将自动添加至账号池！');
+      await waitForLogin();
+    }
+  } catch (err: any) {
+    await notify('error', `发起登录失败: ${err.message}`);
+  }
+}
+
+function setUsageTab(tab: 'current' | 'global'): void {
+  usageMode = tab;
+  if (latestUsage) {
+    renderUsage(latestUsage);
   }
 }
 
@@ -541,21 +839,11 @@ async function saveCalibratedCredits(): Promise<void> {
   }
 }
 
-function renderUsage(usage: Usage): void {
-  $('statTokens').textContent = fmt(usage.totalTokens);
-  $('statRequests').textContent = fmt(usage.requestCount);
-  $('statRate').textContent = usage.avgTokPerSec ? String(usage.avgTokPerSec) : '0';
-  $('statInput').textContent = fmt(usage.inputTokens);
-  $('statOutput').textContent = fmt(usage.outputTokens);
-
-  if (usage.credits) {
-    renderCredits(usage.credits);
-  }
-
+function renderModelBars(modelStats: Record<string, { requests: number; inputTokens: number; outputTokens: number; creditsConsumed?: number }>): void {
   const bars = $('usageBars');
   bars.textContent = '';
-  const entries = Object.entries(usage.modelStats || {}).sort(
-    (a, b) => b[1].inputTokens + b[1].outputTokens - (a[1].inputTokens + a[1].outputTokens),
+  const entries = Object.entries(modelStats || {}).sort(
+    (a, b) => (b[1].inputTokens + b[1].outputTokens) - (a[1].inputTokens + a[1].outputTokens),
   );
   if (entries.length === 0) {
     const empty = document.createElement('div');
@@ -565,14 +853,16 @@ function renderUsage(usage: Usage): void {
     bars.append(empty);
     return;
   }
-  const max = Math.max(1, ...entries.map(([, v]) => v.inputTokens + v.outputTokens));
+  const max = Math.max(1, ...entries.map(([, v]) => (v.inputTokens || 0) + (v.outputTokens || 0)));
   for (const [modelId, stat] of entries) {
     const row = document.createElement('div');
     row.className = 'bar-row';
-    const total = stat.inputTokens + stat.outputTokens;
+    const inT = stat.inputTokens || 0;
+    const outT = stat.outputTokens || 0;
+    const total = inT + outT;
     const label = document.createElement('div');
     const creditsStr = stat.creditsConsumed ? ` · 扣除 ${stat.creditsConsumed.toFixed(2)} 积分` : '';
-    label.textContent = `${modelId} · ${fmt(total)} tok · ${stat.requests} 次${creditsStr}`;
+    label.textContent = `${modelId} · ${fmt(total)} tok (入 ${fmt(inT)} / 出 ${fmt(outT)}) · ${stat.requests} 次${creditsStr}`;
     const track = document.createElement('div');
     track.className = 'bar-track';
     const fill = document.createElement('div');
@@ -581,6 +871,76 @@ function renderUsage(usage: Usage): void {
     track.append(fill);
     row.append(label, track);
     bars.append(row);
+  }
+}
+
+function renderUsage(usage: UsageResponse): void {
+  latestUsage = usage;
+
+  const isGlobal = usageMode === 'global';
+
+  const tabCur = document.getElementById('tabCurrentAccount');
+  const tabGlob = document.getElementById('tabGlobalCumulative');
+  if (tabCur && tabGlob) {
+    tabCur.classList.toggle('active', !isGlobal);
+    tabGlob.classList.toggle('active', isGlobal);
+  }
+
+  const nameEl = document.getElementById('usageAccountName');
+  const rateLabel = document.getElementById('statRateLabel');
+
+  if (isGlobal) {
+    const gu = usage.globalCumulative || {
+      totalTokens: usage.totalTokens || 0,
+      inputTokens: usage.inputTokens || 0,
+      outputTokens: usage.outputTokens || 0,
+      requestCount: usage.requestCount || 0,
+      creditsConsumed: 0,
+      avgTokPerSec: 0,
+    };
+    const agg = usage.allAccountsAggregate;
+    const accCount = agg?.accountsCount || accountsList.length || 1;
+
+    if (nameEl) nameEl.textContent = `插件跨账号全局累计 (共 ${accCount} 个账号历史汇总)`;
+    if (rateLabel) rateLabel.textContent = '全局 tok/s';
+
+    $('statTokens').textContent = fmt(gu.totalTokens);
+    $('statRequests').textContent = fmt(gu.requestCount);
+    $('statRate').textContent = gu.avgTokPerSec ? String(gu.avgTokPerSec) : '0';
+    $('statInput').textContent = fmt(gu.inputTokens);
+    $('statOutput').textContent = fmt(gu.outputTokens);
+
+    const consumed = gu.creditsConsumed || agg?.creditsConsumed || 0;
+    const statCreditsEl = document.getElementById('statCreditsConsumed');
+    if (statCreditsEl) statCreditsEl.textContent = consumed.toFixed(2);
+
+    renderModelBars(usage.modelStats || {});
+  } else {
+    const cur = usage.currentAccount || {
+      nickname: '',
+      totalTokens: usage.totalTokens,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      requestCount: usage.requestCount,
+      avgTokPerSec: usage.avgTokPerSec,
+      modelStats: usage.modelStats,
+      credits: usage.credits,
+    };
+
+    if (nameEl) nameEl.textContent = cur.nickname ? `${cur.nickname} (${cur.region === 'china' ? '中国版' : '国际版'})` : '当前激活账号';
+    if (rateLabel) rateLabel.textContent = '平均 tok/s';
+
+    $('statTokens').textContent = fmt(cur.totalTokens);
+    $('statRequests').textContent = fmt(cur.requestCount);
+    $('statRate').textContent = cur.avgTokPerSec ? String(cur.avgTokPerSec) : '0';
+    $('statInput').textContent = fmt(cur.inputTokens);
+    $('statOutput').textContent = fmt(cur.outputTokens);
+
+    if (cur.credits) {
+      renderCredits(cur.credits);
+    }
+
+    renderModelBars(cur.modelStats || usage.modelStats || {});
   }
 }
 
@@ -744,9 +1104,15 @@ async function runProbe(modelId: string): Promise<void> {
 }
 
 async function resetUsage(): Promise<void> {
-  const usage = await serviceRequest<Usage>('POST', '/usage/reset');
+  const isGlobal = usageMode === 'global';
+  const confirmText = isGlobal
+    ? '确定清空插件【全局跨账号历史累计】用量统计吗？'
+    : '确定清空【当前激活账号】的用量统计吗？';
+  if (!confirm(confirmText)) return;
+
+  const usage = await serviceRequest<UsageResponse>('POST', '/usage/reset', { scope: isGlobal ? 'global' : 'current' });
   if (usage) {
     renderUsage(usage);
-    await notify('info', '已清空 Token 用量统计');
+    await notify('info', isGlobal ? '已清空插件全局累计用量' : '已清空当前账号用量');
   }
 }

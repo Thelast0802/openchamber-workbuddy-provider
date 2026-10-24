@@ -29,12 +29,13 @@ Modern autonomous AI coding agents (such as OpenCode) rely heavily on reliable, 
 ### 🚀 Key Features
 
 - 🎯 **OpenCode First**: Automatically updates `~/.config/opencode/opencode.json` with zero manual configuration. Operates natively with the `opencode` terminal CLI.
+- 👥 **Multi-Account Pool & Hot-Swapping (New in v1.1.0)**: Manages multiple International and China accounts simultaneously. Switch active accounts instantly via GUI dropdown or CLI (`--switch <id>`) with zero downtime. Automatically detects and flags upstream 11140 account restrictions.
 - 🖥️ **OpenChamber GUI Companion**: Provides a sidebar Webview extension for visual control, model speed testing, live balance calibration, and toggling.
 - 🛡️ **5.8.4 Client Signature Alignment**: Full out-of-the-box emulation of official desktop headers (`X-Conversation-ID`, `X-Conversation-Request-ID`, `X-Conversation-Message-ID`, `X-Root-Request-ID`, W3C traceparents) to permanently resolve upstream `11128` channel verification rejections.
 - 🧠 **Native DeepSeek Thinking (Reasoning)**: Declares `capabilities.reasoning` in OpenCode, displaying real-time thinking collapsible blocks in both CLI and GUI interfaces.
 - 🌐 **Dual-Region Support**: Instant switching between International (`workbuddy.ai`) and China (`copilot.tencent.com`).
 - ⚡ **Stream Speed Probes**: Sub-second, low-overhead time-to-first-token (TTFT) latency measurements for all available models.
-- 📊 **Local Credit & Token Telemetry**: Tracks token usage per model and provides accurate credit deduction tracking.
+- 📊 **Dual-View Telemetry & Cumulative Aggregation (New in v1.1.0)**: Inspect both granular per-account usage and global lifetime aggregate token metrics (prompt tokens, completion tokens, total tokens, requests, and credit deductions across all stored accounts).
 
 ### 🏗️ Architecture
 
@@ -113,11 +114,12 @@ opencode
 ### ✨ 核心特性
 
 - 🎯 **以 OpenCode CLI 为核心**：无缝打通 OpenCode 配置体系（`~/.config/opencode/opencode.json`），命令行一键登录授权并自动同步模型，终端开发者开箱即用。
+- 👥 **多账号池与热切换（v1.1.0 新增）**：内置多账号存储池，集中纳管已登录的多个国际版与中国版账号。UI 下拉菜单与命令行（`--switch <ID>`）均支持实时热切账号，零停机无缝切换；自动捕获并标记上游 11140 账号风控状态。
 - 🖥️ **深度适配 OpenChamber**：内置完整的 Webview 侧栏扩展面板，支持测速全部、模型独立开关、实时额度校准与用量统计。
 - 🛡️ **对齐官方 5.8.4 客户端抓包**：出站请求完整注入官方会话头族（`X-Conversation-ID`、`X-Conversation-Request-ID`、`X-Conversation-Message-ID`、`X-Root-Request-ID`）与 W3C 分布式追踪链路头，**彻底解决上游 11128 渠道校验（Channel Verification）拦截**。
 - 🧠 **深度思考（Thinking / Reasoning）支持**：全面适配 DeepSeek 系列（DeepSeek V4.1 Flash / R1 等），网关层自动维护思维链激活规则，向 OpenCode / OpenChamber 声明 `capabilities.reasoning`，UI 界面实时展现思考折叠框与档位选择。
 - 🌐 **双版本自由切换**：支持「国际版 WorkBuddy (`workbuddy.ai`)」与「中国版 CodeBuddy (`copilot.tencent.com`)」，独立存储凭据与模型清单，终端与 UI 均支持快速切换。
-- 📊 **额度校准与用量看板**：支持初始额度设定与真实 Token 扣减实时追踪，准确掌握账号余额变化。
+- 📊 **双重视角用量统计与全局累计求和（v1.1.0 新增）**：支持一键切换「当前激活账号用量」与「插件全局累计汇总」，完整统计输入 Token、输出 Token、总 Token、请求次数及各个账号累计消耗积分。
 - 💻 **跨平台原生兼容**：Windows / macOS / Linux 深度适配，自动兼容 Windows `%APPDATA%\opencode` 与 POSIX 文件系统权限。
 
 ### 🚀 快速上手

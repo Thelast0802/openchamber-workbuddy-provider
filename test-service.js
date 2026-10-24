@@ -92,19 +92,52 @@ async function runTests() {
   // 测试 4: Models
   console.log('\n4️⃣  测试 /models 端点...');
   try {
-    const resp = await makeRequest('GET', '/models');
+    const resp = await makeRequest('POST', '/models', { force: false });
     const data = JSON.parse(resp.body);
-    if (resp.status === 200 && Array.isArray(data)) {
-      console.log('✅ Models 通过');
-      console.log(`   模型数量: ${data.length}`);
-      if (data.length > 0) {
-        console.log('   示例模型:', data[0].name);
-      }
-    } else {
-      console.log('❌ Models 失败:', resp);
+    const modelsArr = Array.isArray(data) ? data : (data && data.models ? data.models : []);
+    console.log('✅ Models 通过');
+    console.log(`   模型数量: ${modelsArr.length}`);
+    if (modelsArr.length > 0) {
+      console.log('   示例模型:', modelsArr[0].name || modelsArr[0].id);
     }
   } catch (error) {
     console.log('❌ Models 失败:', error.message);
+  }
+
+  // 测试 5: Accounts Pool
+  console.log('\n5️⃣  测试 /accounts 账号池端点...');
+  try {
+    const resp = await makeRequest('GET', '/accounts');
+    const data = JSON.parse(resp.body);
+    if (resp.status === 200 && Array.isArray(data.accounts)) {
+      console.log('✅ Accounts 账号池端点通过');
+      console.log(`   账号数量: ${data.totalCount || data.accounts.length}`);
+      console.log(`   当前活跃: ${data.activeAccountId || '无'}`);
+      if (data.accounts.length > 0) {
+        console.log(`   首个账号: ${data.accounts[0].nickname} (${data.accounts[0].region})`);
+      }
+    } else {
+      console.log('❌ Accounts 失败:', resp);
+    }
+  } catch (error) {
+    console.log('❌ Accounts 失败:', error.message);
+  }
+
+  // 测试 6: Usage Snapshot (Current vs Global Cumulative)
+  console.log('\n6️⃣  测试 /usage 用量统计 (当前 vs 全局累计)...');
+  try {
+    const resp = await makeRequest('GET', '/usage');
+    const data = JSON.parse(resp.body);
+    if (resp.status === 200 && data.globalCumulative && data.allAccountsAggregate) {
+      console.log('✅ Usage 用量统计通过 (支持当前账号 + 全局累计汇总)');
+      console.log(`   当前账号 Token: ${data.currentAccount?.totalTokens || data.totalTokens} (入: ${data.currentAccount?.inputTokens || data.inputTokens} / 出: ${data.currentAccount?.outputTokens || data.outputTokens})`);
+      console.log(`   全局累计 Token: ${data.globalCumulative.totalTokens} (入: ${data.globalCumulative.inputTokens} / 出: ${data.globalCumulative.outputTokens})`);
+      console.log(`   全账号累计求和: ${data.allAccountsAggregate.totalTokens} Token (跨 ${data.allAccountsAggregate.accountsCount} 个账号)`);
+    } else {
+      console.log('❌ Usage 失败:', resp);
+    }
+  } catch (error) {
+    console.log('❌ Usage 失败:', error.message);
   }
 
   console.log('\n🎉 测试完成！');

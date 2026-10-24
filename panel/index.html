@@ -140,6 +140,48 @@
     .stat-v { font-size: 17px; font-weight: 600; }
     .stat-k { font-size: 10px; color: var(--muted); }
 
+    .tab-group {
+      display: flex; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 2px; gap: 2px; margin-top: 10px; margin-bottom: 8px;
+    }
+    .tab-btn {
+      flex: 1; text-align: center; padding: 6px 8px; font-size: 12px; font-weight: 500;
+      border-radius: 4px; border: none; background: transparent; cursor: pointer; color: var(--muted);
+      transition: all .15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      background: var(--surface); color: var(--primary); font-weight: 600;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.08); border: 1px solid var(--border);
+    }
+
+    .account-pool {
+      margin-top: 8px; display: flex; flex-direction: column; gap: 6px;
+    }
+    .account-card {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 10px; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; transition: border-color .15s, background .15s;
+    }
+    .account-card.active {
+      border-color: var(--primary); background: rgba(59, 130, 246, 0.05);
+    }
+    .account-card.restricted {
+      border-color: var(--error); background: rgba(239, 68, 68, 0.05);
+    }
+    .account-tag {
+      font-size: 10px; padding: 1px 5px; border-radius: 4px; font-weight: 600;
+    }
+    .account-tag.intl { background: rgba(59, 130, 246, 0.15); color: var(--primary); }
+    .account-tag.china { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+    .account-badge {
+      font-size: 10px; padding: 1px 6px; border-radius: 10px; font-weight: 600;
+    }
+    .account-badge.active { background: var(--success); color: #fff; }
+    .account-badge.ready { background: var(--border); color: var(--muted); }
+    .account-badge.restricted { background: var(--error); color: #fff; }
+    .account-badge.expired { background: var(--warning); color: #fff; }
+
     .bars { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
     .bar-row { font-size: 11px; }
     .bar-track { height: 5px; background: var(--border); border-radius: 3px; margin-top: 2px; overflow: hidden; }
@@ -175,15 +217,39 @@
 
   <div class="diag-bar" id="diagBar">正在连接扩展后台服务…</div>
 
-  <div class="card">
+  <div class="card" id="accountSection">
     <div class="row">
-      <span class="label">账号状态</span>
-      <span class="badge idle" id="statusBadge">检测中</span>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <span class="label">账号状态</span>
+        <span class="badge idle" id="statusBadge">检测中</span>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="small" id="togglePoolBtn" title="查看并管理所有已登录账号">👥 账号池 (<span id="accountPoolCount">0</span>)</button>
+        <button class="small hidden" id="logoutButton">退出当前</button>
+      </div>
     </div>
     <div class="muted" id="accountInfo" style="margin-top:6px;">正在自动检测本机免登录凭据…</div>
+
+    <!-- 快捷账号选择器 -->
+    <div class="row hidden" id="quickAccountBar" style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--border);">
+      <div style="font-size:12px; color:var(--muted); flex:none;">当前账号:</div>
+      <select id="quickAccountSelect" style="flex:1; font-size:12px; font-weight:500; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text); padding:4px 8px; cursor:pointer;">
+      </select>
+    </div>
+
+    <!-- 账号池展开抽屉/列表 -->
+    <div class="hidden" id="accountPoolDrawer" style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
+      <div class="row" style="margin-bottom:6px;">
+        <div class="section-title" style="font-size:12px;">已存储账号池</div>
+        <button class="small primary" id="addAccountBtn">+ 添加新账号</button>
+      </div>
+      <div class="account-pool" id="accountListContainer">
+        <div class="muted" style="font-size:12px;">加载账号列表中…</div>
+      </div>
+    </div>
+
     <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
       <button class="primary block" id="loginButton" style="flex:1;">一键授权 / 自动免密接入</button>
-      <button class="small hidden" id="logoutButton">退出</button>
     </div>
     <div class="hint hidden" id="loginUrlBox"></div>
     <div class="hint hidden" id="configHint"></div>
@@ -220,11 +286,22 @@
       <span class="section-title">用量统计</span>
       <button class="small" id="usageResetButton">清空统计</button>
     </div>
+
+    <!-- 统计视角切换 Tab -->
+    <div class="tab-group" id="usageTabGroup">
+      <button class="tab-btn active" id="tabCurrentAccount" data-tab="current">👤 当前账号用量</button>
+      <button class="tab-btn" id="tabGlobalCumulative" data-tab="global">🌐 插件全局累计 (全账号汇总)</button>
+    </div>
+
+    <div class="muted" id="usageAccountBanner" style="font-size:11px; margin-bottom:6px;">
+      统计对象：<span id="usageAccountName" style="font-weight:600; color:var(--text);">-</span>
+    </div>
+
     <div class="stat-grid" style="grid-template-columns: repeat(4, 1fr);">
       <div class="stat"><div class="stat-v" id="statTokens">0</div><div class="stat-k">总消耗 Token</div></div>
       <div class="stat"><div class="stat-v" id="statRequests">0</div><div class="stat-k">总请求数</div></div>
       <div class="stat"><div class="stat-v" id="statCreditsConsumed" style="color:var(--warning);">0.00</div><div class="stat-k">消耗积分</div></div>
-      <div class="stat"><div class="stat-v" id="statRate">0</div><div class="stat-k">平均 tok/s</div></div>
+      <div class="stat"><div class="stat-v" id="statRate">0</div><div class="stat-k" id="statRateLabel">平均 tok/s</div></div>
     </div>
     <div class="stat-grid" style="grid-template-columns: 1fr 1fr; margin-top:8px;">
       <div class="stat"><div class="stat-v" id="statInput">0</div><div class="stat-k">输入 Token</div></div>
